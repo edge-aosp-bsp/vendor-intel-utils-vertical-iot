@@ -1,0 +1,30 @@
+From 51736ab1be60f946c36bb9ea19dab995e72ccd2b Mon Sep 17 00:00:00 2001
+From: somkarx <suhasx.omkar@intel.com>
+Date: Tue, 17 Mar 2026 06:39:23 +0000
+Subject: [PATCH] Enable virtual keyboard with hardware keyboard
+
+Set show_ime_with_hard_keyboard to true so the virtual keyboard
+appears even when HID devices like barcode scanners or MSR are
+connected and detected as hardware keyboards.
+
+Tracked-On: NIACP3-1214
+Signed-off-by: somkarx <suhasx.omkar@intel.com>
+---
+ .../base/packages/SettingsProvider/res/values/defaults.xml     | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/groups/device-specific/caas/overlay/frameworks/base/packages/SettingsProvider/res/values/defaults.xml b/groups/device-specific/caas/overlay/frameworks/base/packages/SettingsProvider/res/values/defaults.xml
+index d385c72c..ee2b75a7 100644
+--- a/groups/device-specific/caas/overlay/frameworks/base/packages/SettingsProvider/res/values/defaults.xml
++++ b/groups/device-specific/caas/overlay/frameworks/base/packages/SettingsProvider/res/values/defaults.xml
+@@ -26,4 +26,7 @@
+ 
+     <!-- Do not enable auto rotation switching -->
+     <bool name="def_accelerometer_rotation">false</bool>
++
++    <!-- Default for Settings.Secure.SHOW_IME_WITH_HARD_KEYBOARD -->
++    <bool name="def_show_ime_with_hard_keyboard">true</bool>
+ </resources>
+-- 
+2.34.1
+
