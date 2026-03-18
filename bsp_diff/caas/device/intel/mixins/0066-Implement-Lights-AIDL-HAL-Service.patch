@@ -1,0 +1,30 @@
+From 7ac24a1926cf8865958ef42029d2b8cdeb93195c Mon Sep 17 00:00:00 2001
+From: somkarx <suhasx.omkar@intel.com>
+Date: Tue, 17 Mar 2026 10:57:59 +0000
+Subject: [PATCH] Implement Lights AIDL HAL Service
+
+Replace android.hardware.lights-service.example with
+android.hardware.lights-service.intel to support backlight
+control and fix UI brightness functionality.
+
+Tracked-On: NIACP3-1149
+Signed-off-by: somkarx <suhasx.omkar@intel.com>
+---
+ groups/lights/true/product.mk | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/groups/lights/true/product.mk b/groups/lights/true/product.mk
+index 2abf18f0..29a5ef17 100644
+--- a/groups/lights/true/product.mk
++++ b/groups/lights/true/product.mk
+@@ -2,6 +2,4 @@
+ BOARD_SEPOLICY_DIRS += \
+     $(INTEL_PATH_SEPOLICY)/light
+ 
+-PRODUCT_PACKAGES += lights.$(TARGET_BOARD_PLATFORM) \
+-    android.hardware.lights-service.example
+-
++PRODUCT_PACKAGES += android.hardware.lights-service.intel
+-- 
+2.34.1
+

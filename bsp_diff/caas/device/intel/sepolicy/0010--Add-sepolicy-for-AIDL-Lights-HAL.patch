@@ -1,0 +1,24 @@
+From 9046de2f2e8e5aec44c45fbc5b3ba0eeb3bea613 Mon Sep 17 00:00:00 2001
+From: somkarx <suhasx.omkar@intel.com>
+Date: Tue, 17 Mar 2026 11:01:34 +0000
+Subject: [PATCH] Add sepolicy for AIDL Lights HAL
+
+Added sepolicy for Lights HAL service
+
+Tracked-On: NIACP3-1149
+Signed-off-by: somkarx <suhasx.omkar@intel.com>
+---
+ light/file_contexts | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 light/file_contexts
+
+diff --git a/light/file_contexts b/light/file_contexts
+new file mode 100644
+index 0000000..16951c3
+--- /dev/null
++++ b/light/file_contexts
+@@ -0,0 +1 @@
++/vendor/bin/hw/android\.hardware\.lights-service\.intel u:object_r:hal_light_default_exec:s0
+-- 
+2.34.1
+
