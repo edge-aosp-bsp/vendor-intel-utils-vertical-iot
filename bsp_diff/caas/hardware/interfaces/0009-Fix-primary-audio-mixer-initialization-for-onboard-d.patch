@@ -1,0 +1,106 @@
+From b98d8bb641ba55cb3fb084a892522b3cbc11d09d Mon Sep 17 00:00:00 2001
+From: Anisetti Avinash Krishna <anisetti.avinash.krishna@intel.com>
+Date: Wed, 25 Mar 2026 07:02:50 +0000
+Subject: [PATCH] Fix primary audio mixer initialization for onboard devices
+
+This patch addresses three related issues preventing mixer settings from
+being programmed on onboard audio devices:
+
+1. Primary mixer initialization (StreamPrimary.cpp):
+   - Extract ALSA device ID calculation before lock to allow immediate
+     use
+   - Initialize PrimaryMixer for attached ALSA devices when
+     setConnectedDevices is called, not just for external devices
+   - Fixes: mixer was never instantiated for onboard speaker/mic
+
+2. Master volume/mute propagation (ModulePrimary):
+   - Add onMasterMuteChanged() and onMasterVolumeChanged() overrides
+   - Forward calls to PrimaryMixer to program ALSA mixer controls
+   - Fixes: framework setMasterMute/Volume calls were no-ops in base
+     class
+
+3. Type correctness fix (Module.h):
+   - Correct getMasterVolume() return type from bool to float
+   - Aligns with mMasterVolume member and AIDL interface contract
+
+Tracked-On: NIACP3-1223
+Signed-off-by: Anisetti Avinash Krishna <anisetti.avinash.krishna@intel.com>
+---
+ audio/aidl/default/ModulePrimary.cpp                 | 8 ++++++++
+ audio/aidl/default/include/core-impl/Module.h        | 2 +-
+ audio/aidl/default/include/core-impl/ModulePrimary.h | 2 ++
+ audio/aidl/default/primary/StreamPrimary.cpp         | 9 +++++++--
+ 4 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/audio/aidl/default/ModulePrimary.cpp b/audio/aidl/default/ModulePrimary.cpp
+index b6bcccc666..193eafbfd9 100644
+--- a/audio/aidl/default/ModulePrimary.cpp
++++ b/audio/aidl/default/ModulePrimary.cpp
+@@ -143,6 +143,14 @@ void ModulePrimary::onExternalDeviceConnectionChanged(
+     }
+ }
+ 
++ndk::ScopedAStatus ModulePrimary::onMasterMuteChanged(bool mute) {
++    return primary::PrimaryMixer::getInstance().setMasterMute(mute);
++}
++
++ndk::ScopedAStatus ModulePrimary::onMasterVolumeChanged(float volume) {
++    return primary::PrimaryMixer::getInstance().setMasterVolume(volume);
++}
++
+ ndk::ScopedAStatus ModulePrimary::populateConnectedDevicePort(AudioPort* audioPort, int32_t nextPortId) {
+     LOG(DEBUG) << __func__ << ": portId=" << audioPort->id << ", nextPortId=" << nextPortId;
+     return ndk::ScopedAStatus::ok();
+diff --git a/audio/aidl/default/include/core-impl/Module.h b/audio/aidl/default/include/core-impl/Module.h
+index 379264d8c7..2d1c041111 100644
+--- a/audio/aidl/default/include/core-impl/Module.h
++++ b/audio/aidl/default/include/core-impl/Module.h
+@@ -250,7 +250,7 @@ class Module : public BnModule {
+     std::vector<::aidl::android::media::audio::common::AudioDevice>
+     getDevicesFromDevicePortConfigIds(const std::set<int32_t>& devicePortConfigIds);
+     bool getMasterMute() const { return mMasterMute; }
+-    bool getMasterVolume() const { return mMasterVolume; }
++    float getMasterVolume() const { return mMasterVolume; }
+     bool getMicMute() const { return mMicMute; }
+     const ModuleDebug& getModuleDebug() const { return mDebug; }
+     const Patches& getPatches() const { return mPatches; }
+diff --git a/audio/aidl/default/include/core-impl/ModulePrimary.h b/audio/aidl/default/include/core-impl/ModulePrimary.h
+index ca36861dfb..a5eae14f3f 100644
+--- a/audio/aidl/default/include/core-impl/ModulePrimary.h
++++ b/audio/aidl/default/include/core-impl/ModulePrimary.h
+@@ -50,6 +50,8 @@ class ModulePrimary final : public Module {
+     void onExternalDeviceConnectionChanged(
+             const ::aidl::android::media::audio::common::AudioPort& audioPort,
+             bool connected) override;
++    ndk::ScopedAStatus onMasterMuteChanged(bool mute) override;
++    ndk::ScopedAStatus onMasterVolumeChanged(float volume) override;
+ 
+     ndk::ScopedAStatus populateConnectedDevicePort(
+             ::aidl::android::media::audio::common::AudioPort* audioPort, int32_t nextPortId) override;
+diff --git a/audio/aidl/default/primary/StreamPrimary.cpp b/audio/aidl/default/primary/StreamPrimary.cpp
+index 7d996a89fc..975cfb9592 100644
+--- a/audio/aidl/default/primary/StreamPrimary.cpp
++++ b/audio/aidl/default/primary/StreamPrimary.cpp
+@@ -147,12 +147,17 @@ ndk::ScopedAStatus StreamPrimary::setConnectedDevices(const ConnectedDevices& de
+                    << devices.size();
+         return ndk::ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
+     }
++    const bool useStubDriver = devices.empty() || useStubStream(mIsInput, devices[0]);
++    const AlsaDeviceId alsaDeviceId = useStubDriver ? kStubDeviceId : getCardAndDeviceId(devices);
+     {
+-        const bool useStubDriver = devices.empty() || useStubStream(mIsInput, devices[0]);
+         std::lock_guard l(mLock);
+-        mAlsaDeviceId = useStubDriver ? kStubDeviceId : getCardAndDeviceId(devices);
++        mAlsaDeviceId = alsaDeviceId;
+     }
+     if (!devices.empty()) {
++        if (alsaDeviceId.first != primary::PrimaryMixer::kInvalidAlsaCard) {
++            primary::PrimaryMixer::getInstance().setDeviceConnectionState(
++                    alsaDeviceId.first, false, 1.0f, true);
++        }
+         auto streamDataProcessor = getContext().getStreamDataProcessor().lock();
+         if (streamDataProcessor != nullptr) {
+             streamDataProcessor->setAudioDevice(devices[0]);
+-- 
+2.34.1
+
