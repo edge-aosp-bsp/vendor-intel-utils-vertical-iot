@@ -1,0 +1,44 @@
+From 45d67d2492a9b706b0701a9cd980fc9aefe5d41c Mon Sep 17 00:00:00 2001
+From: Anisetti Avinash Krishna <anisetti.avinash.krishna@intel.com>
+Date: Mon, 20 Apr 2026 09:07:59 +0000
+Subject: [PATCH] Register location control service
+
+Add location_control service to SELinux service contexts and service
+fuzzer bindings.
+Enable framework-side location control service to communicate with
+vendor HAL.
+
+Tracked-On: NIACP3-1182
+Signed-off-by: Anisetti Avinash Krishna <anisetti.avinash.krishna@intel.com>
+---
+ build/soong/service_fuzzer_bindings.go | 1 +
+ private/service_contexts               | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/build/soong/service_fuzzer_bindings.go b/build/soong/service_fuzzer_bindings.go
+index 6f25ee633..cf6fa795d 100644
+--- a/build/soong/service_fuzzer_bindings.go
++++ b/build/soong/service_fuzzer_bindings.go
+@@ -337,6 +337,7 @@ var (
+ 		"lights":                                 EXCEPTION_NO_FUZZER,
+ 		"locale":                                 EXCEPTION_NO_FUZZER,
+ 		"location":                               EXCEPTION_NO_FUZZER,
++		"location_control":                       EXCEPTION_NO_FUZZER,
+ 		"location_time_zone_manager":             EXCEPTION_NO_FUZZER,
+ 		"lock_settings":                          EXCEPTION_NO_FUZZER,
+ 		"logcat":                                 EXCEPTION_NO_FUZZER,
+diff --git a/private/service_contexts b/private/service_contexts
+index 67c84d5de..c6a68b434 100644
+--- a/private/service_contexts
++++ b/private/service_contexts
+@@ -323,6 +323,7 @@ legacy_permission                         u:object_r:legacy_permission_service:s
+ lights                                    u:object_r:light_service:s0
+ locale                                    u:object_r:locale_service:s0
+ location                                  u:object_r:location_service:s0
++location_control                          u:object_r:location_service:s0
+ location_time_zone_manager                u:object_r:location_time_zone_manager_service:s0
+ lock_settings                             u:object_r:lock_settings_service:s0
+ logcat                                    u:object_r:logcat_service:s0
+-- 
+2.34.1
+
