@@ -1,0 +1,440 @@
+From 73da1a28883ed4be9a2b59180a59a7d643e8e532 Mon Sep 17 00:00:00 2001
+From: Anisetti Avinash Krishna <anisetti.avinash.krishna@intel.com>
+Date: Mon, 20 Apr 2026 08:58:58 +0000
+Subject: [PATCH] Add location control service for static location HAL
+
+Add framework-side location control service, HAL wrapper and provider plumbing.
+Wire SystemServer and LocationManagerService to expose Intel static
+location through the framework.
+
+Tracked-On: NIACP3-1182
+Signed-off-by: Anisetti Avinash Krishna <anisetti.avinash.krishna@intel.com>
+---
+ .../location/ILocationControlService.aidl     |  27 ++++
+ services/core/Android.bp                      |   1 +
+ .../location/LocationControlService.java      | 102 ++++++++++++++
+ .../server/location/LocationHalWrapper.java   |  65 +++++++++
+ .../location/LocationManagerService.java      |  17 +++
+ .../provider/HalLocationProvider.java         | 124 ++++++++++++++++++
+ .../java/com/android/server/SystemServer.java |   5 +
+ 7 files changed, 341 insertions(+)
+ create mode 100644 core/java/android/location/ILocationControlService.aidl
+ create mode 100644 services/core/java/com/android/server/location/LocationControlService.java
+ create mode 100644 services/core/java/com/android/server/location/LocationHalWrapper.java
+ create mode 100644 services/core/java/com/android/server/location/provider/HalLocationProvider.java
+
+diff --git a/core/java/android/location/ILocationControlService.aidl b/core/java/android/location/ILocationControlService.aidl
+new file mode 100644
+index 000000000000..8e77eb5649cd
+--- /dev/null
++++ b/core/java/android/location/ILocationControlService.aidl
+@@ -0,0 +1,27 @@
++/*
++ * Copyright (C) 2026 Intel Corporation
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package android.location;
++
++/**
++ * @hide
++ */
++interface ILocationControlService {
++    /**
++     * Set the static location (latitude and longitude).
++     */
++    void setLocation(double lat, double lon);
++}
+diff --git a/services/core/Android.bp b/services/core/Android.bp
+index 8a983f9e071d..3c31b8ef7575 100644
+--- a/services/core/Android.bp
++++ b/services/core/Android.bp
+@@ -202,6 +202,7 @@ java_library_static {
+         "android.hardware.boot-V1.2-java", // HIDL
+         "android.hardware.boot-V1-java", // AIDL
+         "android.hardware.broadcastradio-V2.0-java", // HIDL
++        "vendor.intel.location-java", // HAL location AIDL
+         "android.hardware.health-V1.0-java", // HIDL
+         "android.hardware.health-V2.0-java", // HIDL
+         "android.hardware.health-V2.1-java", // HIDL
+diff --git a/services/core/java/com/android/server/location/LocationControlService.java b/services/core/java/com/android/server/location/LocationControlService.java
+new file mode 100644
+index 000000000000..23917f53065d
+--- /dev/null
++++ b/services/core/java/com/android/server/location/LocationControlService.java
+@@ -0,0 +1,102 @@
++/*
++ * Copyright (C) 2026 Intel Corporation
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.location;
++
++import android.Manifest;
++import android.content.Context;
++import android.os.Binder;
++import android.os.IBinder;
++import android.util.Log;
++
++import com.android.server.LocalServices;
++import com.android.server.SystemService;
++import com.android.server.location.provider.HalLocationProvider;
++
++import android.location.ILocationControlService;
++
++import java.io.File;
++import java.io.FileWriter;
++import java.io.IOException;
++
++/**
++ * Service for controlling static location provider.
++ * Allows system/privileged apps to update the location.
++ *
++ * @hide
++ */
++public final class LocationControlService extends SystemService {
++
++    private static final String TAG = "LocationControlService";
++    private static final String SERVICE_NAME = "location_control";
++    private static final String CONFIG_PATH = "/data/vendor/location/location.conf";
++
++    private HalLocationProvider mHalProvider;
++
++    public LocationControlService(Context context) {
++        super(context);
++    }
++
++    @Override
++    public void onStart() {
++        publishBinderService(SERVICE_NAME, new LocationControlBinder());
++        LocalServices.addService(LocationControlService.class, this);
++    }
++
++    /**
++     * Called by LocationManagerService to set the HAL provider reference.
++     */
++    public void setHalProvider(HalLocationProvider provider) {
++        mHalProvider = provider;
++    }
++
++    /**
++     * Binder service implementation for ILocationControlService.
++     */
++    private final class LocationControlBinder extends ILocationControlService.Stub {
++
++        @Override
++        public void setLocation(double lat, double lon) throws android.os.RemoteException {
++            getContext().enforceCallingPermission(
++                    Manifest.permission.LOCATION_HARDWARE,
++                    "Permission denied for setLocation");
++
++            writeConfig(lat, lon);
++
++            if (mHalProvider != null) {
++                mHalProvider.refreshLocation();
++            }
++        }
++
++        private void writeConfig(double lat, double lon) {
++            try {
++                File configFile = new File(CONFIG_PATH);
++                File parentDir = configFile.getParentFile();
++                if (parentDir != null && !parentDir.exists()) {
++                    parentDir.mkdirs();
++                }
++
++                try (FileWriter writer = new FileWriter(configFile)) {
++                    writer.write("lat=" + lat + "\n");
++                    writer.write("lon=" + lon + "\n");
++                }
++                Log.d(TAG, "Wrote location config: lat=" + lat + ", lon=" + lon);
++            } catch (IOException e) {
++                Log.e(TAG, "Failed to write location config", e);
++            }
++        }
++    }
++}
+diff --git a/services/core/java/com/android/server/location/LocationHalWrapper.java b/services/core/java/com/android/server/location/LocationHalWrapper.java
+new file mode 100644
+index 000000000000..f546ce07da2e
+--- /dev/null
++++ b/services/core/java/com/android/server/location/LocationHalWrapper.java
+@@ -0,0 +1,65 @@
++/*
++ * Copyright (C) 2026 Intel Corporation
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.location;
++
++import android.os.IBinder;
++import android.os.RemoteException;
++import android.os.ServiceManager;
++import android.util.Log;
++
++import vendor.intel.location.ILocationHal;
++
++/**
++ * Wrapper for binder communication with vendor location HAL.
++ *
++ * @hide
++ */
++public final class LocationHalWrapper {
++
++    private static final String TAG = "LocationHalWrapper";
++    private static final String HAL_SERVICE = "vendor.intel.location.ILocationHal/default";
++
++    private ILocationHal mHal;
++
++    /**
++     * Gets latitude from vendor HAL.
++     */
++    public double getLatitude() throws RemoteException {
++        return getHal().getLatitude();
++    }
++
++    /**
++     * Gets longitude from vendor HAL.
++     */
++    public double getLongitude() throws RemoteException {
++        return getHal().getLongitude();
++    }
++
++    private ILocationHal getHal() throws RemoteException {
++        if (mHal == null) {
++            final IBinder binder = ServiceManager.waitForService(HAL_SERVICE);
++            if (binder == null) {
++                throw new RemoteException("LocationHal service not available: " + HAL_SERVICE);
++            }
++            mHal = ILocationHal.Stub.asInterface(binder);
++            if (mHal == null) {
++                throw new RemoteException("Failed to get ILocationHal interface");
++            }
++        }
++        return mHal;
++    }
++}
+diff --git a/services/core/java/com/android/server/location/LocationManagerService.java b/services/core/java/com/android/server/location/LocationManagerService.java
+index 6dff2d8d0a98..4ec38718976d 100644
+--- a/services/core/java/com/android/server/location/LocationManagerService.java
++++ b/services/core/java/com/android/server/location/LocationManagerService.java
+@@ -147,6 +147,7 @@ import com.android.server.location.provider.MockLocationProvider;
+ import com.android.server.location.provider.PassiveLocationProvider;
+ import com.android.server.location.provider.PassiveLocationProviderManager;
+ import com.android.server.location.provider.StationaryThrottlingLocationProvider;
++import com.android.server.location.provider.HalLocationProvider;
+ import com.android.server.location.provider.proxy.ProxyGeocodeProvider;
+ import com.android.server.location.provider.proxy.ProxyLocationProvider;
+ import com.android.server.location.provider.proxy.ProxyPopulationDensityProvider;
+@@ -531,6 +532,22 @@ public class LocationManagerService extends ILocationManager.Stub implements
+             addLocationProviderManager(gnssManager, gnssProvider);
+         }
+ 
++        // initialize HAL location provider
++        try {
++            HalLocationProvider halProvider = new HalLocationProvider(mContext,
++                    FgThread.getExecutor());
++            LocationProviderManager halManager = new LocationProviderManager(
++                    mContext, mInjector, "hal", mPassiveManager);
++            addLocationProviderManager(halManager, halProvider);
++            LocationControlService controlService = LocalServices.getService(
++                    LocationControlService.class);
++            if (controlService != null) {
++                controlService.setHalProvider(halProvider);
++            }
++        } catch (Throwable e) {
++            Log.e(TAG, "unable to initialize hal location provider", e);
++        }
++
+         // bind to geocoder provider
+         mGeocodeProvider = ProxyGeocodeProvider.createAndRegister(mContext);
+         if (mGeocodeProvider == null) {
+diff --git a/services/core/java/com/android/server/location/provider/HalLocationProvider.java b/services/core/java/com/android/server/location/provider/HalLocationProvider.java
+new file mode 100644
+index 000000000000..f7dc85b0067b
+--- /dev/null
++++ b/services/core/java/com/android/server/location/provider/HalLocationProvider.java
+@@ -0,0 +1,124 @@
++/*
++ * Copyright (C) 2026 Intel Corporation
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.location.provider;
++
++import android.content.Context;
++import android.location.Location;
++import android.location.LocationResult;
++import android.location.LocationResult.BadLocationException;
++import android.location.provider.ProviderProperties;
++import android.location.provider.ProviderRequest;
++import android.os.Bundle;
++import android.os.RemoteException;
++import android.util.Log;
++
++import com.android.server.location.LocationHalWrapper;
++
++import java.io.FileDescriptor;
++import java.io.PrintWriter;
++import java.util.Collections;
++import java.util.concurrent.Executor;
++
++/**
++ * Location provider that reports static location from vendor HAL.
++ * Reads location once at startup and caches it until updated.
++ *
++ * @hide
++ */
++public final class HalLocationProvider extends AbstractLocationProvider {
++
++    private static final String TAG = "HalLocationProvider";
++    private static final String PROVIDER_NAME = "hal";
++
++    private final Context mContext;
++    private final LocationHalWrapper mHalWrapper;
++
++    public HalLocationProvider(Context context, Executor executor) {
++        super(executor, /*identity=*/ null,
++                new ProviderProperties.Builder()
++                        .setHasAltitudeSupport(false)
++                        .setHasSpeedSupport(false)
++                        .setHasBearingSupport(false)
++                        .setAccuracy(ProviderProperties.ACCURACY_FINE)
++                        .setPowerUsage(ProviderProperties.POWER_USAGE_LOW)
++                        .build(),
++                Collections.emptySet());
++        mContext = context;
++        mHalWrapper = new LocationHalWrapper();
++        setAllowed(true);
++    }
++
++    @Override
++    protected void onStart() {
++        reportCurrentLocation();
++    }
++
++    @Override
++    protected void onStop() {
++    }
++
++    @Override
++    protected void onSetRequest(ProviderRequest request) {
++    }
++
++    @Override
++    protected void onFlush(Runnable callback) {
++        callback.run();
++    }
++
++    @Override
++    protected void onExtraCommand(int uid, int pid, String command, Bundle extras) {
++    }
++
++    @Override
++    protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
++        pw.println("HalLocationProvider");
++    }
++
++    /**
++     * Called by LocationControlService after config file is updated.
++     */
++    public void refreshLocation() {
++        reportCurrentLocation();
++    }
++
++    private void reportCurrentLocation() {
++        try {
++            double latitude = mHalWrapper.getLatitude();
++            double longitude = mHalWrapper.getLongitude();
++
++            Location location = new Location(PROVIDER_NAME);
++            location.setLatitude(latitude);
++            location.setLongitude(longitude);
++            location.setAccuracy(ProviderProperties.ACCURACY_FINE);
++            location.setTime(System.currentTimeMillis());
++            location.setElapsedRealtimeNanos(android.os.SystemClock.elapsedRealtimeNanos());
++
++            try {
++                LocationResult result = LocationResult.wrap(
++                        Collections.singletonList(location)).validate();
++                if (result != null) {
++                    reportLocation(result);
++                }
++            } catch (BadLocationException e) {
++                Log.w(TAG, "Invalid location from HAL", e);
++            }
++        } catch (RemoteException e) {
++            Log.e(TAG, "Failed to get location from HAL", e);
++        }
++    }
++}
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 56ec27a0ba87..73fe9afcac68 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -187,6 +187,7 @@ import com.android.server.job.JobSchedulerService;
+ import com.android.server.lights.LightsService;
+ import com.android.server.locales.LocaleManagerService;
+ import com.android.server.location.LocationManagerService;
++import com.android.server.location.LocationControlService;
+ import com.android.server.location.altitude.AltitudeService;
+ import com.android.server.locksettings.LockSettingsService;
+ import com.android.server.logcat.LogcatManagerService;
+@@ -2330,6 +2331,10 @@ public final class SystemServer implements Dumpable {
+             mSystemServiceManager.startService(LocationManagerService.Lifecycle.class);
+             t.traceEnd();
+ 
++            t.traceBegin("StartLocationControlService");
++            mSystemServiceManager.startService(LocationControlService.class);
++            t.traceEnd();
++
+             t.traceBegin("StartCountryDetectorService");
+             try {
+                 countryDetector = new CountryDetectorService(context);
+-- 
+2.34.1
+
