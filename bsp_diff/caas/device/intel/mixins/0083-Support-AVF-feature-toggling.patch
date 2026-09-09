@@ -1,0 +1,118 @@
+From c8cb0b2ec720074268a70d4acb273954c9ea400c Mon Sep 17 00:00:00 2001
+From: Basanagouda Nagappa Koppad <basanagouda.nagappa.koppad@intel.com>
+Date: Wed, 9 Sep 2026 08:54:45 +0000
+Subject: [PATCH] Support AVF feature toggling
+
+Default configuration is AVF enabled, Trusty Disabled
+
+For AVF disabled, Trusty enabled
+export ENABLE_TRUSTY=true
+Pass compile time build flag ENABLE_AVF=false
+
+Tracked-On: NIACP3-1577
+Signed-off-by: Basanagouda Nagappa Koppad <basanagouda.nagappa.koppad@intel.com>
+---
+ groups/device-specific/caas/AndroidBoard.mk          | 11 +++++++++++
+ groups/device-specific/caas/BoardConfig.mk           |  6 +++++-
+ groups/device-specific/caas/product.mk               | 12 ++++++++++--
+ .../linux-intel-lts2024/avf_disable_diffconfig       | 11 +++++++++++
+ 4 files changed, 37 insertions(+), 3 deletions(-)
+ create mode 100644 groups/kernel/gmin64/config-lts/linux-intel-lts2024/avf_disable_diffconfig
+
+diff --git a/groups/device-specific/caas/AndroidBoard.mk b/groups/device-specific/caas/AndroidBoard.mk
+index 722eb178..1264ae90 100644
+--- a/groups/device-specific/caas/AndroidBoard.mk
++++ b/groups/device-specific/caas/AndroidBoard.mk
+@@ -3,6 +3,17 @@ KERNEL_DIFFCONFIG += $(KERNEL_VIRT_DIFFCONFIG)
+ KERNEL_CAAS_DIFFCONFIG = $(wildcard $(KERNEL_CONFIG_PATH)/caas_diffconfig)
+ KERNEL_DIFFCONFIG += $(KERNEL_CAAS_DIFFCONFIG)
+ 
++# AVF Layer 1 (kernel-level gating). When ENABLE_AVF=false, append a diffconfig
++# that unsets CONFIG_KVM so the built kernel has no /dev/kvm and cannot launch
++# VMs. This makes ENABLE_AVF=false disable AVF at the KERNEL level, not just in
++# userspace. Appended last so it overrides CONFIG_KVM=y from the base defconfig.
++# Mutually exclusive with Trusty (IKGT), which blocks KVM at the hypervisor level.
++ENABLE_AVF ?= true
++ifeq ($(ENABLE_AVF),false)
++KERNEL_AVF_DISABLE_DIFFCONFIG = $(wildcard $(KERNEL_CONFIG_PATH)/avf_disable_diffconfig)
++KERNEL_DIFFCONFIG += $(KERNEL_AVF_DISABLE_DIFFCONFIG)
++endif
++
+ # Specify /dev/mmcblk0 size here
+ BOARD_MMC_SIZE = 15335424K
+ 
+diff --git a/groups/device-specific/caas/BoardConfig.mk b/groups/device-specific/caas/BoardConfig.mk
+index 55257e38..4621667c 100644
+--- a/groups/device-specific/caas/BoardConfig.mk
++++ b/groups/device-specific/caas/BoardConfig.mk
+@@ -10,12 +10,16 @@ BOARD_KERNEL_CMDLINE += \
+ 	reboot=a,e,p,t,f \
+ 	loop.max_part=7
+ 
+-# AVF: Set hypervisor properties in bootconfig for VirtualizationService
++# AVF: Set hypervisor properties in bootconfig for VirtualizationService.
++# Configurable via ENABLE_AVF (default: enabled). Mutually exclusive with Trusty.
++ENABLE_AVF ?= true
++ifeq ($(ENABLE_AVF),true)
+ ifeq ($(BOOTCONFIG_ENABLE), true)
+ BOARD_BOOTCONFIG += androidboot.hypervisor.vm.supported=1
+ BOARD_BOOTCONFIG += androidboot.hypervisor.protected_vm.supported=0
+ BOARD_BOOTCONFIG += androidboot.hypervisor.version=kvm
+ endif
++endif
+ 
+ BOARD_FLASHFILES += ${TARGET_DEVICE_DIR}/bldr_utils.img:bldr_utils.img
+ BOARD_FLASHFILES += $(PRODUCT_OUT)/LICENSE
+diff --git a/groups/device-specific/caas/product.mk b/groups/device-specific/caas/product.mk
+index b5e5f0f6..e2973a5a 100644
+--- a/groups/device-specific/caas/product.mk
++++ b/groups/device-specific/caas/product.mk
+@@ -9,7 +9,6 @@ PRODUCT_COPY_FILES += \
+ {{#treble}}
+     $(LOCAL_PATH)/init.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.$(TARGET_PRODUCT).rc \
+     $(LOCAL_PATH)/ueventd.rc:$(TARGET_COPY_OUT_VENDOR)/etc/ueventd.rc \
+-    $(LOCAL_PATH)/init.avf.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.avf.rc \
+ {{/treble}}
+ {{^treble}}
+     $(LOCAL_PATH)/init.rc:root/init.$(TARGET_PRODUCT).rc \
+@@ -20,10 +19,19 @@ PRODUCT_PACKAGES += vndservicemanager
+ 
+ PRODUCT_PACKAGES += SystemUpdaterSample
+ 
+-# AVF (Android Virtualization Framework) - enable full APEX with vm CLI, crosvm, virtualizationservice
++# AVF (Android Virtualization Framework) - configurable via ENABLE_AVF (default: enabled).
++# Mutually exclusive with Trusty (TARGET_USE_TRUSTY); enable only one on a given build.
++ENABLE_AVF ?= true
++ifeq ($(ENABLE_AVF),true)
++# Enable full APEX with vm CLI, crosvm, virtualizationservice
+ $(call inherit-product, packages/modules/Virtualization/apex/product_packages.mk)
+ PRODUCT_PACKAGES += com.android.virt
+ 
++# AVF hypervisor capability properties for VirtualizationService
++PRODUCT_COPY_FILES += \
++    $(LOCAL_PATH)/init.avf.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.avf.rc
++endif
++
+ # PRODUCT_PACKAGES += androidx.window.extensions \
+ 		    androidx.window.sidecar
+ 
+diff --git a/groups/kernel/gmin64/config-lts/linux-intel-lts2024/avf_disable_diffconfig b/groups/kernel/gmin64/config-lts/linux-intel-lts2024/avf_disable_diffconfig
+new file mode 100644
+index 00000000..f72325f0
+--- /dev/null
++++ b/groups/kernel/gmin64/config-lts/linux-intel-lts2024/avf_disable_diffconfig
+@@ -0,0 +1,11 @@
++# AVF Layer 1 kernel-level disable fragment.
++# Applied ONLY when ENABLE_AVF=false (see device-specific/caas/AndroidBoard.mk).
++# Removes KVM hypervisor support from the kernel so that /dev/kvm is not created
++# and no virtual machine can be launched - disabling AVF at the KERNEL level, not
++# just userspace. These lines are concatenated AFTER the base x86_64_defconfig, so
++# they override CONFIG_KVM*=y (last value wins under "make olddefconfig").
++# Disabling CONFIG_KVM cascades: KVM_X86, KVM_INTEL and all KVM_* helpers are
++# dropped automatically by Kconfig dependency resolution.
++# CONFIG_KVM_INTEL is not set
++# CONFIG_KVM_AMD is not set
++# CONFIG_KVM is not set
+-- 
+2.34.1
+
